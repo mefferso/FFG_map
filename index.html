@@ -1,110 +1,259 @@
-<script>
-const map = L.map('map').setView([30.2, -90.5], 8);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WFO LIX Flash Flood Guidance</title>
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap'
-}).addTo(map);
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-const wmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
+    <style>
+        html, body, #map {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #1a1a1a;
+        }
 
-L.tileLayer.wms(wmsUrl, {
-    layers: '0',
-    format: 'image/png',
-    transparent: true,
-    opacity: 0.7,
-    attribution: 'NOAA / NWS'
-}).addTo(map);
+        #info-banner {
+            position: absolute;
+            top: 10px;
+            left: 50px;
+            z-index: 1000;
+            background: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+            font-family: Arial, sans-serif;
+        }
 
-map.on('click', function(e) {
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
+        #info-banner h3 {
+            margin: 0 0 5px 0;
+            font-size: 15px;
+        }
 
-    const popup = L.popup()
-        .setLatLng(e.latlng)
-        .setContent("<i>Sampling FFG grid...</i>")
-        .openOn(map);
+        #info-banner p {
+            margin: 0;
+            font-size: 11px;
+            color: #555;
+        }
 
-    const b = map.getBounds();
-    const size = map.getSize();
+        .leaflet-popup-content {
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+        }
 
-    const mapExtent = [
-        b.getWest(),
-        b.getSouth(),
-        b.getEast(),
-        b.getNorth()
-    ].join(',');
+        .ffg-value {
+            color: #d9534f;
+            font-weight: bold;
+        }
 
-    const imageDisplay = `${size.x},${size.y},96`;
+        .muted {
+            color: #666;
+            font-size: 11px;
+        }
 
-    const params = new URLSearchParams({
-        f: "json",
-        geometry: `${lng},${lat}`,
-        geometryType: "esriGeometryPoint",
-        sr: "4326",
-        layers: "all:3",              // 1-hour FFG Image sublayer
-        tolerance: "1",
-        mapExtent: mapExtent,
-        imageDisplay: imageDisplay,
-        returnGeometry: "false",
-        returnUnformattedValues: "true"
-    });
+        .bad {
+            color: #d9534f;
+            font-weight: bold;
+        }
+    </style>
+</head>
 
-    const identityUrl =
-        "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify?" +
-        params.toString();
+<body>
 
-    fetch(identityUrl)
-        .then(response => response.json())
-        .then(data => {
-            console.log("Identify response:", data);
+    <div id="info-banner">
+        <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
+        <p>Click the map to sample the FFG grid</p>
+    </div>
 
-            if (!data.results || data.results.length === 0) {
-                popup.setContent(`
-                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}<br>
-                    <span style="color:#888;">No FFG grid value returned here.</span>
-                `);
-                return;
-            }
+    <div id="map"></div>
 
-            const result = data.results[0];
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // ------------------------------------------------------------
+        // Map setup
+        // ------------------------------------------------------------
+        const map = L.map('map').setView([30.2, -90.5], 8);
+
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+        }).addTo(map);
+
+        // ------------------------------------------------------------
+        // NWS Flash Flood Guidance display layer
+        // ------------------------------------------------------------
+        const wmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
+
+        L.tileLayer.wms(wmsUrl, {
+            layers: "0",
+            format: "image/png",
+            transparent: true,
+            opacity: 0.7,
+            attribution: "NOAA / NWS"
+        }).addTo(map);
+
+        // ------------------------------------------------------------
+        // ArcGIS REST identify endpoint for sampling values
+        // ------------------------------------------------------------
+        const identifyBaseUrl =
+            "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify";
+
+        // Layer 3 should be the 1-hour FFG raster image sublayer.
+        const identifyLayer = "all:3";
+
+        function getMapExtent() {
+            const b = map.getBounds();
+
+            return [
+                b.getWest(),
+                b.getSouth(),
+                b.getEast(),
+                b.getNorth()
+            ].join(",");
+        }
+
+        function getImageDisplay() {
+            const size = map.getSize();
+            return `${size.x},${size.y},96`;
+        }
+
+        function getBestFFGValue(result) {
             const attrs = result.attributes || {};
 
-            const possibleValue =
-                attrs["Pixel Value"] ??
-                attrs["Pixel value"] ??
-                attrs["PixelValue"] ??
-                attrs["Raster.PixelValue"] ??
-                attrs["Stretched value"] ??
-                result.value;
+            // Try the most likely ArcGIS raster attribute names first.
+            const candidates = [
+                attrs["Pixel Value"],
+                attrs["Pixel value"],
+                attrs["PixelValue"],
+                attrs["Raster.PixelValue"],
+                attrs["Stretched value"],
+                attrs["Value"],
+                attrs["VALUE"]
+            ];
 
-            const ffg = parseFloat(possibleValue);
+            for (const candidate of candidates) {
+                const num = parseFloat(candidate);
 
-            if (!Number.isFinite(ffg) || ffg <= 0 || ffg > 20) {
-                popup.setContent(`
-                    <b>Bad/unsupported sampled value:</b> ${possibleValue}<br>
-                    <span style="color:#888;">
-                        That is not a valid 1-hr FFG value. Check console response.
-                    </span><br><br>
-                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
-                `);
-                return;
+                if (Number.isFinite(num) && num > 0 && num <= 20) {
+                    return num;
+                }
             }
 
-            popup.setContent(`
-                <div style="font-family:Arial; font-size:13px;">
-                    <strong>1-Hr FFG:</strong>
-                    <span style="color:#d9534f; font-weight:bold;">${ffg.toFixed(2)} inches</span><br>
-                    <span style="color:#666; font-size:11px;">
-                        Rainfall required in 1 hour to initiate flash flooding.
-                    </span><br><br>
-                    <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
-                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
-                </div>
-            `);
-        })
-        .catch(error => {
-            console.error("Identify error:", error);
-            popup.setContent("<b>Error:</b> Could not query NOAA/NWS FFG service.");
+            // Backup: scan attributes for anything value/pixel-ish.
+            for (const [key, val] of Object.entries(attrs)) {
+                const keyLower = key.toLowerCase();
+
+                if (
+                    keyLower.includes("pixel") ||
+                    keyLower === "value" ||
+                    keyLower.includes("ffg") ||
+                    keyLower.includes("guidance")
+                ) {
+                    const num = parseFloat(val);
+
+                    if (Number.isFinite(num) && num > 0 && num <= 20) {
+                        return num;
+                    }
+                }
+            }
+
+            // Last resort: result.value, but only if it passes sanity check.
+            const resultValue = parseFloat(result.value);
+
+            if (Number.isFinite(resultValue) && resultValue > 0 && resultValue <= 20) {
+                return resultValue;
+            }
+
+            return null;
+        }
+
+        function buildIdentifyUrl(lat, lng) {
+            const params = new URLSearchParams({
+                f: "json",
+                geometry: `${lng},${lat}`,
+                geometryType: "esriGeometryPoint",
+                sr: "4326",
+                layers: identifyLayer,
+                tolerance: "1",
+                mapExtent: getMapExtent(),
+                imageDisplay: getImageDisplay(),
+                returnGeometry: "false",
+                returnUnformattedValues: "true"
+            });
+
+            return `${identifyBaseUrl}?${params.toString()}`;
+        }
+
+        map.on("click", function(e) {
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
+
+            const popup = L.popup()
+                .setLatLng(e.latlng)
+                .setContent("<i>Sampling FFG grid...</i>")
+                .openOn(map);
+
+            const identifyUrl = buildIdentifyUrl(lat, lng);
+
+            fetch(identifyUrl)
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Full identify response:", data);
+
+                    if (!data.results || data.results.length === 0) {
+                        popup.setContent(`
+                            <b>Lat:</b> ${lat.toFixed(4)} |
+                            <b>Lng:</b> ${lng.toFixed(4)}<br>
+                            <span class="muted">No FFG grid value returned here.</span>
+                        `);
+                        return;
+                    }
+
+                    const result = data.results[0];
+                    const ffg = getBestFFGValue(result);
+
+                    console.log("Chosen identify result:", result);
+                    console.log("Chosen FFG value:", ffg);
+
+                    if (ffg === null) {
+                        popup.setContent(`
+                            <b>Bad/unsupported sampled value</b><br>
+                            <span class="bad">Raw result.value:</span> ${result.value}<br><br>
+                            <span class="muted">
+                                This is not a valid 1-hour FFG value. Open DevTools with F12 and check the console.
+                            </span><br><br>
+                            <b>Lat:</b> ${lat.toFixed(4)} |
+                            <b>Lng:</b> ${lng.toFixed(4)}
+                        `);
+                        return;
+                    }
+
+                    popup.setContent(`
+                        <div>
+                            <strong>1-Hr FFG:</strong>
+                            <span class="ffg-value">${ffg.toFixed(2)} inches</span><br>
+                            <span class="muted">
+                                Rainfall required in 1 hour to initiate flash flooding.
+                            </span><br><br>
+                            <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
+                            <b>Lat:</b> ${lat.toFixed(4)} |
+                            <b>Lng:</b> ${lng.toFixed(4)}
+                        </div>
+                    `);
+                })
+                .catch(error => {
+                    console.error("Identify error:", error);
+
+                    popup.setContent(`
+                        <b>Error:</b> Could not query NOAA/NWS FFG service.<br>
+                        <span class="muted">Open DevTools with F12 and check the console.</span>
+                    `);
+                });
         });
-});
-</script>
+    </script>
+
+</body>
+</html>
