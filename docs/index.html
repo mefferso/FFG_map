@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WFO LIX Flash Flood Guidance Viewer</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        /* Make the map take up the entire browser window */
+        html, body, #map {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            font-family: Arial, sans-serif;
+        }
+        /* Style the informational floating banner */
+        #info-banner {
+            position: absolute;
+            top: 10px;
+            left: 50px;
+            z-index: 1000;
+            background: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        h3 { margin: 0 0 5px 0; font-size: 16px; }
+        p { margin: 0; font-size: 12px; color: #555; }
+    </style>
+</head>
+<body>
+
+    <div id="info-banner">
+        <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
+        <p>🖱️ Click anywhere on the map to sample the precise rainfall threshold.</p>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // 1. Initialize map centered tightly on the WFO New Orleans / Baton Rouge footprint
+        const map = L.map('map').setView([30.2, -90.5], 8);
+
+        // 2. Add a clean, dark background map so weather features stand out clearly
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap &copy; CARTO'
+        }).addTo(map);
+
+        // 3. Define the NWS Flash Flood Guidance Map Service endpoints
+        const nmsBaseUrl = "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer";
+        const layerId = 0; // Layer 0 represents the 1-Hour Flash Flood Guidance window
+
+        // 4. Overlay the visual color tile layer over our map layout
+        L.tileLayer.wms(`${nmsBaseUrl}/WMSServer`, {
+            layers: layerId.toString(),
+            format: 'image/png',
+            transparent: true,
+            opacity: 0.75,
+            attribution: 'NOAA / NWS Weather Prediction Center'
+        }).addTo(map);
+
+        // 5. Click Handler: Queries NWS Server for exact database attributes at your cursor's spot
+        map.on('click', function(e) {
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
+
+            // Display a temporary loading placeholder inside the popup bubble
+            const popup = L.popup()
+                .setLatLng(e.latlng)
+                .setContent("<i>Querying NWS database...</i>")
+                .openOn(map);
+
+            // Construct an ArcGIS REST spatial identification query based on point geometry 
+            const queryUrl = `${nmsBaseUrl}/${layerId}/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=false&f=json`;
+
+            fetch(queryUrl)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.features && data.features.length > 0) {
+                        // Extract attributes returned by the River Forecast Center database
+                        const attributes = data.features[0].attributes;
+                        
+                        // Look for the value field across standard database variations (Pixel Value / Pixel_Value)
+                        const ffgValue = attributes.Pixel_Value || attributes.Pixel_value || attributes.value || "Unknown";
+                        
+                        let displayValue = ffgValue;
+                        // Format value clearly if it returns numeric attributes
+                        if (!isNaN(parseFloat(ffgValue))) {
+                            displayValue = `<b>${parseFloat(ffgValue).toFixed(2)} inches</b>`;
+                        }
+
+                        // Update the map bubble with actual structured database values
+                        popup.setContent(`
+                            <div style="font-size:13px;">
+                                <strong>Flash Flood Guidance:</strong> ${displayValue}<br>
+                                <span style="color:#666; font-size:11px;">Required rainfall within 1 hour to trigger flooding.</span><br><br>
+                                <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
+                                <b>Lat:</b> ${lat.toFixed(4)}<br>
+                                <b>Lng:</b> ${lng.toFixed(4)}
+                            </div>
+                        `);
+                    } else {
+                        popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:red;">No FFG data here (likely open water).</span>`);
+                    }
+                })
+                .catch(error => {
+                    console.error("Error identifying layer information:", error);
+                    popup.setContent("<b>Error:</b> Unable to pull data from NWS service.");
+                });
+        });
+    </script>
+</body>
+</html>
