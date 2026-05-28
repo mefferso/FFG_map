@@ -34,7 +34,7 @@
 
     <div id="info-banner">
         <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
-        <p>🖱️ Click anywhere on the map to sample the raw rainfall values.</p>
+        <p>Base Map: Dark Matter | Data Source: NOAA NWS</p>
     </div>
 
     <div id="map"></div>
@@ -42,48 +42,50 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
-        // 1. Center the map grid directly over Southeast Louisiana / Southern Mississippi
+        // 1. Center map directly over Southeast Louisiana / Southern Mississippi
         const map = L.map('map').setView([30.2, -90.5], 8);
 
-        // 2. High-contrast dark basemap layer
+        // 2. Clear, high-contrast dark basemap layer
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; OpenStreetMap'
         }).addTo(map);
 
-        // 3. Display the actual visual NWS Flash Flood Guidance color layer
-        // This uses the exact WMS link from your working python script
+        // 3. Display the visual color layer (Layer 0 handles the display mosaic smoothly)
         const wmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
         
         L.tileLayer.wms(wmsUrl, {
-            layers: '0', // Layer 0 is the 1-Hour Guidance
+            layers: '0', 
             format: 'image/png',
             transparent: true,
-            opacity: 0.75,
+            opacity: 0.7,
             attribution: 'NOAA / NWS'
         }).addTo(map);
 
-        // 4. Click Handler: Queries the NWS root database map service accurately
+        // 4. Click Handler: Queries Layer 3 (the raw image pixels) to read actual rainfall values
         map.on('click', function(e) {
             const lat = e.latlng.lat;
             const lng = e.latlng.lng;
 
             const popup = L.popup()
                 .setLatLng(e.latlng)
-                .setContent("<i>Querying NWS Grid...</i>")
+                .setContent("<i>Sampling grid pixel...</i>")
                 .openOn(map);
 
-            // Corrected ArcGIS identity URL endpoint at the root MapServer level
-            const identityUrl = `https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify?geometry=${lng},${lat}&geometryType=esriGeometryPoint&sr=4326&layers=all:0&tolerance=4&mapExtent=${lng-0.05},${lat-0.05},${lng+0.05},${lat+0.05}&imageDisplay=800,600,96&f=json`;
+            // CRUCIAL FIX: Changing layers=all:0 to layers=all:3 to target raw data pixels directly
+            const identityUrl = `https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify?geometry=${lng},${lat}&geometryType=esriGeometryPoint&sr=4326&layers=all:3&tolerance=2&mapExtent=${lng-0.02},${lat-0.02},${lng+0.02},${lat+0.02}&imageDisplay=800,600,96&f=json`;
 
             fetch(identityUrl)
                 .then(response => response.json())
                 .then(data => {
                     if (data.results && data.results.length > 0) {
                         const result = data.results[0];
-                        const val = result.value;
+                        
+                        // Extract the true pixel measurement value
+                        const rawValue = result.value;
 
-                        if (val && val !== "NoData" && !isNaN(parseFloat(val))) {
-                            const inches = parseFloat(val).toFixed(2);
+                        // Check if the pixel has real data and isn't open ocean/out of bounds
+                        if (rawValue && rawValue !== "NoData" && parseFloat(rawValue) < 20) {
+                            const inches = parseFloat(rawValue).toFixed(2);
                             popup.setContent(`
                                 <div style="font-family:Arial; font-size:13px;">
                                     <strong>Guidance Threshold:</strong> <span style="color:#d9534f; font-weight:bold;">${inches} inches</span><br>
@@ -93,15 +95,15 @@
                                 </div>
                             `);
                         } else {
-                            popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No flood data maps to open water or offshore zones.</span>`);
+                            popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No data value here (water surface or marine zone).</span>`);
                         }
                     } else {
-                        popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No data returned from NWS grid.</span>`);
+                        popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No gridded data returned at this location.</span>`);
                     }
                 })
                 .catch(error => {
                     console.error("Error:", error);
-                    popup.setContent("<b>Error:</b> Data connection timed out.");
+                    popup.setContent("<b>Error:</b> Link connection to NWS server timed out.");
                 });
         });
     </script>
