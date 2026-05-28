@@ -28,7 +28,7 @@ folium.raster_layers.WmsTileLayer(
 m.add_child(folium.LatLngPopup())
 
 # 4. Save it as a web page and automatically open it for you
-output_file = "wfo_lix_flood_map.html"
+output_file = "index.html"
 m.save(output_file)
 
 # Open the map automatically in your internet browser
