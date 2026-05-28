@@ -261,6 +261,4 @@ html = r"""<!DOCTYPE html>
 output_file = Path("index.html")
 output_file.write_text(html, encoding="utf-8")
 
-webbrowser.open(output_file.resolve().as_uri())
-
-print(f"Created and opened: {output_file.resolve()}")
+print(f"Created: {output_file.resolve()}")
