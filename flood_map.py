@@ -5,7 +5,7 @@ html = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WFO LIX Flash Flood Guidance</title>
+    <title>LA/MS Flash Flood Guidance</title>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
@@ -59,16 +59,17 @@ html = r"""<!DOCTYPE html>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
-        // Rough bounding box for Louisiana + Mississippi, with enough padding for border context.
+        // Louisiana + Mississippi view, with a little edge padding for nearby context.
         const laMsBounds = L.latLngBounds(
-            [28.75, -94.25],   // southwest corner
-            [35.15, -88.00]    // northeast corner
+            [28.75, -94.25],
+            [35.15, -88.00]
         );
 
         const map = L.map('map', {
             maxBounds: laMsBounds.pad(0.25),
             maxBoundsViscosity: 0.85,
-            minZoom: 6
+            minZoom: 6,
+            maxZoom: 11
         });
 
         map.fitBounds(laMsBounds);
@@ -77,28 +78,81 @@ html = r"""<!DOCTYPE html>
             attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
         }).addTo(map);
 
-        // Add a subtle LA/MS domain box so it is obvious what the app is focused on.
-        L.rectangle(laMsBounds, {
-            color: '#ffffff',
-            weight: 1,
-            opacity: 0.55,
-            fill: false,
-            interactive: false
-        }).addTo(map);
-
         const mapServerBase = "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer";
 
-        // Use the parent 1-hour mosaic layer for drawing. The child raster layer alone
-        // can draw only part of the mosaic in some views, which is the weird cutoff you saw.
+        // ArcGIS MapServer layer 0 is the parent 1-hour FFG mosaic.
+        // We build it as true map tiles instead of one giant imageOverlay. That avoids
+        // the old stretching/cutoff/vanishing behavior when panning or zooming.
         const displayLayer = "show:0";
-
-        // Query both the parent mosaic and child image layer. ArcGIS usually returns the
-        // useful identify result from the child image layer, but asking both is safer.
         const queryLayer = "all:0,3";
+
+        const ffgPane = map.createPane('ffgPane');
+        ffgPane.style.zIndex = 450;
+        ffgPane.style.pointerEvents = 'none';
+
+        function tileCoordsToMercatorBbox(coords) {
+            const tileSize = 256;
+            const crs = map.options.crs;
+
+            const nwPoint = L.point(coords.x * tileSize, coords.y * tileSize);
+            const sePoint = nwPoint.add([tileSize, tileSize]);
+
+            const nwLatLng = crs.pointToLatLng(nwPoint, coords.z);
+            const seLatLng = crs.pointToLatLng(sePoint, coords.z);
+
+            const nwMerc = crs.project(nwLatLng);
+            const seMerc = crs.project(seLatLng);
+
+            // ArcGIS expects xmin,ymin,xmax,ymax.
+            return [nwMerc.x, seMerc.y, seMerc.x, nwMerc.y].join(',');
+        }
+
+        const FfgExportTileLayer = L.TileLayer.extend({
+            createTile: function(coords, done) {
+                const img = document.createElement('img');
+                img.alt = '';
+                img.setAttribute('role', 'presentation');
+
+                const params = new URLSearchParams({
+                    f: 'image',
+                    bbox: tileCoordsToMercatorBbox(coords),
+                    bboxSR: '3857',
+                    imageSR: '3857',
+                    size: '256,256',
+                    dpi: '96',
+                    format: 'png32',
+                    transparent: 'true',
+                    layers: displayLayer
+                });
+
+                img.onload = function() { done(null, img); };
+                img.onerror = function() { done(new Error('FFG tile failed'), img); };
+                img.src = `${mapServerBase}/export?${params.toString()}`;
+
+                return img;
+            }
+        });
+
+        const ffgLayer = new FfgExportTileLayer('', {
+            tileSize: 256,
+            opacity: 0.75,
+            pane: 'ffgPane',
+            bounds: laMsBounds.pad(0.25),
+            noWrap: true,
+            updateWhenIdle: true,
+            keepBuffer: 2,
+            attribution: 'NOAA / NWS'
+        }).addTo(map);
+
+        const overlays = {
+            '1-Hr FFG': ffgLayer
+        };
+
+        L.control.layers(null, overlays, { collapsed: true }).addTo(map);
 
         function getMapExtentString() {
             const b = map.getBounds();
-            return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
+            return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
         }
 
         function getImageDisplayString() {
@@ -106,48 +160,18 @@ html = r"""<!DOCTYPE html>
             return `${size.x},${size.y},96`;
         }
 
-        function updateFfgOverlay() {
-            const size = map.getSize();
-            const bounds = map.getBounds();
-
-            const params = new URLSearchParams({
-                f: "image",
-                bbox: getMapExtentString(),
-                bboxSR: "4326",
-                imageSR: "3857",
-                size: `${size.x},${size.y}`,
-                dpi: "96",
-                format: "png32",
-                transparent: "true",
-                layers: displayLayer
-            });
-
-            const url = `${mapServerBase}/export?${params.toString()}`;
-            console.log("FFG overlay URL:", url);
-
-            if (window.ffgOverlay) {
-                window.ffgOverlay.setUrl(url);
-                window.ffgOverlay.setBounds(bounds);
-            } else {
-                window.ffgOverlay = L.imageOverlay(url, bounds, {
-                    opacity: 0.75,
-                    interactive: false
-                }).addTo(map);
-            }
-        }
-
         function findBestNumericValue(result) {
             const attrs = result.attributes || {};
 
             const candidates = [
-                attrs["Raster.ServicePixelValue"],
-                attrs["Classify.Pixel Value"],
-                attrs["Pixel Value"],
-                attrs["Pixel value"],
-                attrs["PixelValue"],
-                attrs["Raster.PixelValue"],
-                attrs["Value"],
-                attrs["VALUE"],
+                attrs['Raster.ServicePixelValue'],
+                attrs['Classify.Pixel Value'],
+                attrs['Pixel Value'],
+                attrs['Pixel value'],
+                attrs['PixelValue'],
+                attrs['Raster.PixelValue'],
+                attrs['Value'],
+                attrs['VALUE'],
                 result.value
             ];
 
@@ -166,22 +190,22 @@ html = r"""<!DOCTYPE html>
 
         function buildIdentifyUrl(lat, lng) {
             const params = new URLSearchParams({
-                f: "json",
+                f: 'json',
                 geometry: `${lng},${lat}`,
-                geometryType: "esriGeometryPoint",
-                sr: "4326",
+                geometryType: 'esriGeometryPoint',
+                sr: '4326',
                 layers: queryLayer,
-                tolerance: "5",
+                tolerance: '5',
                 mapExtent: getMapExtentString(),
                 imageDisplay: getImageDisplayString(),
-                returnGeometry: "false",
-                returnUnformattedValues: "true"
+                returnGeometry: 'false',
+                returnUnformattedValues: 'true'
             });
 
             return `${mapServerBase}/identify?${params.toString()}`;
         }
 
-        map.on("click", function(e) {
+        map.on('click', function(e) {
             const lat = e.latlng.lat;
             const lng = e.latlng.lng;
 
@@ -193,7 +217,7 @@ html = r"""<!DOCTYPE html>
             fetch(buildIdentifyUrl(lat, lng))
                 .then(response => response.json())
                 .then(data => {
-                    console.log("Full identify response:", data);
+                    console.log('Full identify response:', data);
 
                     if (!data.results || data.results.length === 0) {
                         popup.setContent(`
@@ -218,15 +242,15 @@ html = r"""<!DOCTYPE html>
                         }
                     }
 
-                    console.log("Chosen identify result:", chosenResult);
-                    console.log("Chosen FFG value:", ffg);
+                    console.log('Chosen identify result:', chosenResult);
+                    console.log('Chosen FFG value:', ffg);
 
                     if (ffg === null) {
                         popup.setContent(`
                             <div class="popup-small">
                                 <b>No numeric FFG value returned here.</b><br>
                                 <span style="color:#888;">
-                                    The image layer is drawing, but NOAA returned NoData or did not expose a numeric
+                                    The FFG layer is drawing, but NOAA returned NoData or did not expose a numeric
                                     raster value for this pixel.
                                 </span><br><br>
                                 <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
@@ -248,7 +272,7 @@ html = r"""<!DOCTYPE html>
                     `);
                 })
                 .catch(error => {
-                    console.error("Identify error:", error);
+                    console.error('Identify error:', error);
                     popup.setContent(`
                         <div class="popup-small">
                             <b>Error:</b> Could not query the NWS FFG service.<br>
@@ -257,9 +281,6 @@ html = r"""<!DOCTYPE html>
                     `);
                 });
         });
-
-        updateFfgOverlay();
-        map.on("moveend zoomend resize", updateFfgOverlay);
     </script>
 </body>
 </html>
