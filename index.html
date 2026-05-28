@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WFO LIX Flash Flood Guidance Viewer</title>
+    <title>WFO LIX Flash Flood Guidance</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
@@ -13,7 +13,7 @@
             padding: 0;
             width: 100%;
             height: 100%;
-            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
         }
         #info-banner {
             position: absolute;
@@ -24,16 +24,17 @@
             padding: 10px 15px;
             border-radius: 5px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            font-family: Arial, sans-serif;
         }
-        h3 { margin: 0 0 5px 0; font-size: 16px; }
-        p { margin: 0; font-size: 12px; color: #555; }
+        h3 { margin: 0 0 5px 0; font-size: 15px; }
+        p { margin: 0; font-size: 11px; color: #555; }
     </style>
 </head>
 <body>
 
     <div id="info-banner">
         <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
-        <p>🖱️ Click anywhere on land to sample the precise rainfall threshold.</p>
+        <p>🖱️ Click anywhere on the map to sample the raw rainfall values.</p>
     </div>
 
     <div id="map"></div>
@@ -41,66 +42,66 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
-        // 1. Initialize map centered on WFO New Orleans / Baton Rouge footprint
+        // 1. Center the map grid directly over Southeast Louisiana / Southern Mississippi
         const map = L.map('map').setView([30.2, -90.5], 8);
 
-        // 2. Clear, high-contrast background map
+        // 2. High-contrast dark basemap layer
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap &copy; CARTO'
+            attribution: '&copy; OpenStreetMap'
         }).addTo(map);
 
-        // 3. Updated NWS MapServer Endpoints (Using the main MapServer proxy to bypass web blocks)
-        const nwsMapUrl = "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer";
-        const layerId = 0; // 1-Hour FFG
-
-        // 4. Overlay the interactive visual weather tiles
-        L.tileLayer('https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/exts/LayerTiles/tile/{layerId}/{z}/{y}/{x}', {
-            layerId: layerId,
-            opacity: 0.7,
-            attribution: 'NOAA / NWS Weather Prediction Center'
+        // 3. Display the actual visual NWS Flash Flood Guidance color layer
+        // This uses the exact WMS link from your working python script
+        const wmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
+        
+        L.tileLayer.wms(wmsUrl, {
+            layers: '0', // Layer 0 is the 1-Hour Guidance
+            format: 'image/png',
+            transparent: true,
+            opacity: 0.75,
+            attribution: 'NOAA / NWS'
         }).addTo(map);
 
-        // 5. Click Handler: Queries NWS Server for exact database value at cursor location
+        // 4. Click Handler: Queries the NWS root database map service accurately
         map.on('click', function(e) {
             const lat = e.latlng.lat;
             const lng = e.latlng.lng;
 
             const popup = L.popup()
                 .setLatLng(e.latlng)
-                .setContent("<i>Reading NWS data...</i>")
+                .setContent("<i>Querying NWS Grid...</i>")
                 .openOn(map);
 
-            // Correctly formatted ArcGIS spatial query for web applications
-            const queryUrl = `${nwsMapUrl}/${layerId}/identify?geometry=${lng},${lat}&geometryType=esriGeometryPoint&sr=4326&layers=all&tolerance=3&mapExtent=${lng-0.1},${lat-0.1},${lng+0.1},${lat+0.1}&imageDisplay=800,600,96&f=json`;
+            // Corrected ArcGIS identity URL endpoint at the root MapServer level
+            const identityUrl = `https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify?geometry=${lng},${lat}&geometryType=esriGeometryPoint&sr=4326&layers=all:0&tolerance=4&mapExtent=${lng-0.05},${lat-0.05},${lng+0.05},${lat+0.05}&imageDisplay=800,600,96&f=json`;
 
-            fetch(queryUrl)
+            fetch(identityUrl)
                 .then(response => response.json())
                 .then(data => {
                     if (data.results && data.results.length > 0) {
-                        const attributes = data.results[0].attributes;
-                        // Grab pixel value representing inches of rain
-                        const ffgValue = attributes["Pixel Value"] || attributes["Pixel_Value"] || attributes["value"];
-                        
-                        if (ffgValue && ffgValue !== "NoData") {
-                            const inches = parseFloat(ffgValue).toFixed(2);
+                        const result = data.results[0];
+                        const val = result.value;
+
+                        if (val && val !== "NoData" && !isNaN(parseFloat(val))) {
+                            const inches = parseFloat(val).toFixed(2);
                             popup.setContent(`
-                                <div style="font-size:13px;">
-                                    <strong>Flash Flood Guidance:</strong> <span style="color:#d9534f; font-weight:bold;">${inches} inches</span><br>
-                                    <span style="color:#666; font-size:11px;">Amount of rain in 1 hour needed to cause flash flooding.</span><br><br>
+                                <div style="font-family:Arial; font-size:13px;">
+                                    <strong>Guidance Threshold:</strong> <span style="color:#d9534f; font-weight:bold;">${inches} inches</span><br>
+                                    <span style="color:#666; font-size:11px;">Rainfall required in 1 hour to trigger a flash flood.</span><br><br>
                                     <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
                                     <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
                                 </div>
                             `);
                         } else {
-                            popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:gray;">No data at this exact point (water/outside bounds).</span>`);
+                            popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No flood data maps to open water or offshore zones.</span>`);
                         }
                     } else {
-                        popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:gray;">No data found.</span>`);
+                        popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No data returned from NWS grid.</span>`);
                     }
                 })
                 .catch(error => {
                     console.error("Error:", error);
-                    popup.setContent("<b>Error:</b> Could not reach NWS data service.");
+                    popup.setContent("<b>Error:</b> Data connection timed out.");
                 });
         });
     </script>
