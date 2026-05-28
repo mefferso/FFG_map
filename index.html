@@ -1,111 +1,110 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WFO LIX Flash Flood Guidance</title>
-    
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
-    <style>
-        html, body, #map {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #1a1a1a;
-        }
-        #info-banner {
-            position: absolute;
-            top: 10px;
-            left: 50px;
-            z-index: 1000;
-            background: white;
-            padding: 10px 15px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-            font-family: Arial, sans-serif;
-        }
-        h3 { margin: 0 0 5px 0; font-size: 15px; }
-        p { margin: 0; font-size: 11px; color: #555; }
-    </style>
-</head>
-<body>
+<script>
+const map = L.map('map').setView([30.2, -90.5], 8);
 
-    <div id="info-banner">
-        <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
-        <p>Base Map: Dark Matter | Data Source: NOAA NWS</p>
-    </div>
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap'
+}).addTo(map);
 
-    <div id="map"></div>
+const wmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+L.tileLayer.wms(wmsUrl, {
+    layers: '0',
+    format: 'image/png',
+    transparent: true,
+    opacity: 0.7,
+    attribution: 'NOAA / NWS'
+}).addTo(map);
 
-    <script>
-        // 1. Center map directly over Southeast Louisiana / Southern Mississippi
-        const map = L.map('map').setView([30.2, -90.5], 8);
+map.on('click', function(e) {
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
 
-        // 2. Clear, high-contrast dark basemap layer
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap'
-        }).addTo(map);
+    const popup = L.popup()
+        .setLatLng(e.latlng)
+        .setContent("<i>Sampling FFG grid...</i>")
+        .openOn(map);
 
-        // 3. Display the visual color layer (Layer 0 handles the display mosaic smoothly)
-        const wmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
-        
-        L.tileLayer.wms(wmsUrl, {
-            layers: '0', 
-            format: 'image/png',
-            transparent: true,
-            opacity: 0.7,
-            attribution: 'NOAA / NWS'
-        }).addTo(map);
+    const b = map.getBounds();
+    const size = map.getSize();
 
-        // 4. Click Handler: Queries Layer 3 (the raw image pixels) to read actual rainfall values
-        map.on('click', function(e) {
-            const lat = e.latlng.lat;
-            const lng = e.latlng.lng;
+    const mapExtent = [
+        b.getWest(),
+        b.getSouth(),
+        b.getEast(),
+        b.getNorth()
+    ].join(',');
 
-            const popup = L.popup()
-                .setLatLng(e.latlng)
-                .setContent("<i>Sampling grid pixel...</i>")
-                .openOn(map);
+    const imageDisplay = `${size.x},${size.y},96`;
 
-            // CRUCIAL FIX: Changing layers=all:0 to layers=all:3 to target raw data pixels directly
-            const identityUrl = `https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify?geometry=${lng},${lat}&geometryType=esriGeometryPoint&sr=4326&layers=all:3&tolerance=2&mapExtent=${lng-0.02},${lat-0.02},${lng+0.02},${lat+0.02}&imageDisplay=800,600,96&f=json`;
+    const params = new URLSearchParams({
+        f: "json",
+        geometry: `${lng},${lat}`,
+        geometryType: "esriGeometryPoint",
+        sr: "4326",
+        layers: "all:3",              // 1-hour FFG Image sublayer
+        tolerance: "1",
+        mapExtent: mapExtent,
+        imageDisplay: imageDisplay,
+        returnGeometry: "false",
+        returnUnformattedValues: "true"
+    });
 
-            fetch(identityUrl)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.results && data.results.length > 0) {
-                        const result = data.results[0];
-                        
-                        // Extract the true pixel measurement value
-                        const rawValue = result.value;
+    const identityUrl =
+        "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify?" +
+        params.toString();
 
-                        // Check if the pixel has real data and isn't open ocean/out of bounds
-                        if (rawValue && rawValue !== "NoData" && parseFloat(rawValue) < 20) {
-                            const inches = parseFloat(rawValue).toFixed(2);
-                            popup.setContent(`
-                                <div style="font-family:Arial; font-size:13px;">
-                                    <strong>Guidance Threshold:</strong> <span style="color:#d9534f; font-weight:bold;">${inches} inches</span><br>
-                                    <span style="color:#666; font-size:11px;">Rainfall required in 1 hour to trigger a flash flood.</span><br><br>
-                                    <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
-                                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
-                                </div>
-                            `);
-                        } else {
-                            popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No data value here (water surface or marine zone).</span>`);
-                        }
-                    } else {
-                        popup.setContent(`<b>Coordinates:</b> ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><span style="color:#888;">No gridded data returned at this location.</span>`);
-                    }
-                })
-                .catch(error => {
-                    console.error("Error:", error);
-                    popup.setContent("<b>Error:</b> Link connection to NWS server timed out.");
-                });
+    fetch(identityUrl)
+        .then(response => response.json())
+        .then(data => {
+            console.log("Identify response:", data);
+
+            if (!data.results || data.results.length === 0) {
+                popup.setContent(`
+                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}<br>
+                    <span style="color:#888;">No FFG grid value returned here.</span>
+                `);
+                return;
+            }
+
+            const result = data.results[0];
+            const attrs = result.attributes || {};
+
+            const possibleValue =
+                attrs["Pixel Value"] ??
+                attrs["Pixel value"] ??
+                attrs["PixelValue"] ??
+                attrs["Raster.PixelValue"] ??
+                attrs["Stretched value"] ??
+                result.value;
+
+            const ffg = parseFloat(possibleValue);
+
+            if (!Number.isFinite(ffg) || ffg <= 0 || ffg > 20) {
+                popup.setContent(`
+                    <b>Bad/unsupported sampled value:</b> ${possibleValue}<br>
+                    <span style="color:#888;">
+                        That is not a valid 1-hr FFG value. Check console response.
+                    </span><br><br>
+                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
+                `);
+                return;
+            }
+
+            popup.setContent(`
+                <div style="font-family:Arial; font-size:13px;">
+                    <strong>1-Hr FFG:</strong>
+                    <span style="color:#d9534f; font-weight:bold;">${ffg.toFixed(2)} inches</span><br>
+                    <span style="color:#666; font-size:11px;">
+                        Rainfall required in 1 hour to initiate flash flooding.
+                    </span><br><br>
+                    <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
+                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
+                </div>
+            `);
+        })
+        .catch(error => {
+            console.error("Identify error:", error);
+            popup.setContent("<b>Error:</b> Could not query NOAA/NWS FFG service.");
         });
-    </script>
-</body>
-</html>
+});
+</script>
