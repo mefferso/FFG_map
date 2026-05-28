@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LA/MS Flash Flood Guidance</title>
+    <title>LMRFC Flash Flood Guidance</title>
 
     <link rel="stylesheet" href="https://js.arcgis.com/4.30/esri/themes/dark/main.css" />
 
@@ -28,7 +28,7 @@
             border-radius: 7px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
             font-family: Arial, sans-serif;
-            max-width: 360px;
+            max-width: 390px;
         }
 
         #info-banner h3 {
@@ -65,8 +65,8 @@
 
 <body>
     <div id="info-banner">
-        <h3>LA/MS - Latest 1-Hr Flash Flood Guidance</h3>
-        <p>NOAA/NWS ArcGIS MapServer layer. Click map to inspect identify response.</p>
+        <h3>LMRFC Local 1-Hr Flash Flood Guidance</h3>
+        <p>Focused on Louisiana, Mississippi, and nearby hydrologic context.</p>
         <div id="ffg-status">Loading FFG layer...</div>
     </div>
 
@@ -83,15 +83,27 @@
             "esri/rest/identify",
             "esri/rest/support/IdentifyParameters",
             "esri/widgets/LayerList",
-            "esri/widgets/Legend"
-        ], function(Map, MapView, MapImageLayer, Extent, identify, IdentifyParameters, LayerList, Legend) {
+            "esri/widgets/Legend",
+            "esri/widgets/Home"
+        ], function(Map, MapView, MapImageLayer, Extent, identify, IdentifyParameters, LayerList, Legend, Home) {
+            // No dedicated public LMRFC-only FFG MapServer was found. This uses the
+            // national RFC mosaic service but keeps display, navigation, and identify
+            // operations constrained to the local LMRFC/LA/MS operating area.
             const mapServerUrl = "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer";
 
-            const laMsExtent = new Extent({
-                xmin: -94.25,
-                ymin: 28.75,
-                xmax: -88.00,
-                ymax: 35.15,
+            const lmrfcLocalExtent = new Extent({
+                xmin: -94.15,
+                ymin: 28.70,
+                xmax: -87.80,
+                ymax: 35.20,
+                spatialReference: { wkid: 4326 }
+            });
+
+            const lmrfcPanLimit = new Extent({
+                xmin: -94.65,
+                ymin: 28.25,
+                xmax: -87.35,
+                ymax: 35.65,
                 spatialReference: { wkid: 4326 }
             });
 
@@ -118,9 +130,9 @@
             const view = new MapView({
                 container: "viewDiv",
                 map,
-                extent: laMsExtent,
+                extent: lmrfcLocalExtent,
                 constraints: {
-                    geometry: laMsExtent.expand(1.25),
+                    geometry: lmrfcPanLimit,
                     minZoom: 6,
                     maxZoom: 12,
                     rotationEnabled: false
@@ -136,7 +148,7 @@
             }
 
             ffgLayer.when(function() {
-                setStatus("FFG display layer loaded.");
+                setStatus("FFG display layer loaded from NOAA national mosaic, constrained locally.");
                 console.log("FFG MapImageLayer loaded:", ffgLayer);
             }).catch(function(error) {
                 setStatus("FFG layer failed to load. Check console.");
@@ -144,13 +156,13 @@
             });
 
             view.when(function() {
-                view.goTo(laMsExtent, { animate: false }).catch(function(error) {
+                view.goTo(lmrfcLocalExtent, { animate: false }).catch(function(error) {
                     console.warn("Initial extent goTo warning:", error);
                 });
 
-                const layerList = new LayerList({
-                    view: view
-                });
+                view.ui.add(new Home({ view: view }), "top-left");
+
+                const layerList = new LayerList({ view: view });
                 view.ui.add(layerList, "top-right");
 
                 const legend = new Legend({
@@ -162,7 +174,9 @@
 
             function parseMaybeNumber(value) {
                 if (value === undefined || value === null) return null;
-                const num = parseFloat(String(value).trim());
+                const text = String(value).trim();
+                if (text.length === 0 || text.toLowerCase() === "nodata") return null;
+                const num = parseFloat(text);
                 if (!Number.isFinite(num)) return null;
                 if (num <= 0 || num > 20) return null;
                 return num;
@@ -170,16 +184,13 @@
 
             function getRawFfgValue(result) {
                 const attrs = result.attributes || {};
-
-                // Do NOT use Classify.Pixel Value as a real FFG amount. That is a display class/bucket,
-                // which is why the previous version lied with the same value everywhere.
                 const rawFieldNames = [
                     "Raster.ServicePixelValue",
                     "Raster.PixelValue",
+                    "ServicePixelValue",
                     "Pixel Value",
                     "Pixel value",
                     "PixelValue",
-                    "ServicePixelValue",
                     "value"
                 ];
 
@@ -196,7 +207,24 @@
 
             function getDisplayClass(result) {
                 const attrs = result.attributes || {};
-                return attrs["Classify.Pixel Value"] ?? attrs["Classify.PixelValue"] ?? attrs["Pixel Value"] ?? null;
+                return attrs["Classify.Pixel Value"] ?? attrs["Classify.PixelValue"] ?? null;
+            }
+
+            function showNoLocalDataPopup(mapPoint, lat, lon, displayClass = null) {
+                view.popup.open({
+                    title: "No current local FFG data",
+                    location: mapPoint,
+                    content: `
+                        <div class="popup-small">
+                            <b>No current local FFG data available for this sector.</b><br>
+                            <span style="color:#666; font-size:11px;">
+                                The layer may be temporarily missing, unissued, masked, or the identify response may not expose a raw pixel value here.
+                                ${displayClass !== null ? `<br>Display class returned: ${displayClass}` : ""}
+                            </span><br><br>
+                            <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lon.toFixed(4)}
+                        </div>
+                    `
+                });
             }
 
             view.on("click", async function(event) {
@@ -213,7 +241,7 @@
                     tolerance: 6,
                     returnGeometry: false,
                     layerOption: "all",
-                    layerIds: [3],
+                    layerIds: [0],
                     geometry: event.mapPoint,
                     mapExtent: view.extent,
                     width: view.width,
@@ -226,16 +254,7 @@
 
                     const results = response.results || [];
                     if (results.length === 0) {
-                        view.popup.open({
-                            title: "No identify result",
-                            location: event.mapPoint,
-                            content: `
-                                <div class="popup-small">
-                                    NOAA did not return a result for this location.<br><br>
-                                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lon.toFixed(4)}
-                                </div>
-                            `
-                        });
+                        showNoLocalDataPopup(event.mapPoint, lat, lon);
                         return;
                     }
 
@@ -246,6 +265,7 @@
                     for (const result of results) {
                         const testValue = getRawFfgValue(result);
                         if (displayClass === null) displayClass = getDisplayClass(result);
+
                         if (testValue !== null) {
                             rawFfg = testValue;
                             chosenResult = result;
@@ -258,20 +278,7 @@
                     console.log("Display class value:", displayClass);
 
                     if (rawFfg === null) {
-                        view.popup.open({
-                            title: "No reliable raw FFG value",
-                            location: event.mapPoint,
-                            content: `
-                                <div class="popup-small">
-                                    The FFG layer is drawing, but the identify response did not expose a trustworthy raw rainfall threshold value.<br><br>
-                                    ${displayClass !== null ? `<b>Display class returned:</b> ${displayClass}<br>` : ""}
-                                    <span style="color:#666; font-size:11px;">
-                                        I am intentionally not treating the display class as inches because it can be a category bucket, not the actual sampled FFG.
-                                    </span><br><br>
-                                    <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lon.toFixed(4)}
-                                </div>
-                            `
-                        });
+                        showNoLocalDataPopup(event.mapPoint, lat, lon, displayClass);
                         return;
                     }
 
@@ -282,24 +289,14 @@
                             <div class="popup-small">
                                 <strong>1-Hr FFG:</strong>
                                 <span class="ffg-value">${rawFfg.toFixed(2)} inches</span><br>
-                                <span style="color:#666; font-size:11px;">Raw value returned by NOAA identify endpoint.</span><br><br>
+                                <span style="color:#666; font-size:11px;">Raw value returned by NOAA identify layer 0.</span><br><br>
                                 <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lon.toFixed(4)}
                             </div>
                         `
                     });
                 } catch (error) {
                     console.error("Identify error:", error);
-                    view.popup.open({
-                        title: "Identify error",
-                        location: event.mapPoint,
-                        content: `
-                            <div class="popup-small">
-                                Could not query the NOAA/NWS identify endpoint.<br>
-                                Check browser console for details.<br><br>
-                                <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lon.toFixed(4)}
-                            </div>
-                        `
-                    });
+                    showNoLocalDataPopup(event.mapPoint, lat, lon);
                 }
             });
         });
