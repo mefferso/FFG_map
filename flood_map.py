@@ -1,36 +1,266 @@
-import folium
+from pathlib import Path
 import webbrowser
-import os
 
-# 1. Setup the map centered over New Orleans / Baton Rouge
-# [Latitude, Longitude]
-wfo_lix_center = [30.2, -90.5]
-m = folium.Map(location=wfo_lix_center, zoom_start=8, tiles="OpenStreetMap")
+html = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WFO LIX Flash Flood Guidance</title>
 
-# 2. Pull the latest NWS 1-Hour Flash Flood Guidance Layer
-# This acts like a digital blanket over the map
-nws_wms_url = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer"
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-folium.raster_layers.WmsTileLayer(
-    url=nws_wms_url,
-    layers="0", # Layer '0' is the 1-Hour guidance data
-    fmt="image/png",
-    transparent=True,
-    version="1.3.0",
-    name="NWS 1-Hour Flash Flood Guidance",
-    attr="National Weather Service",
-    overlay=True,
-    control=True,
-    opacity=0.7
-).add_to(m)
+    <style>
+        html, body, #map {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #1a1a1a;
+        }
 
-# 3. Add a tool that gives you the coordinates wherever your cursor clicks
-m.add_child(folium.LatLngPopup())
+        #info-banner {
+            position: absolute;
+            top: 10px;
+            left: 50px;
+            z-index: 1000;
+            background: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+            font-family: Arial, sans-serif;
+        }
 
-# 4. Save it as a web page and automatically open it for you
-output_file = "index.html"
-m.save(output_file)
+        #info-banner h3 {
+            margin: 0 0 5px 0;
+            font-size: 15px;
+        }
 
-# Open the map automatically in your internet browser
-webbrowser.open('file://' + os.path.realpath(output_file))
-print("Map successfully created! It should now open in your internet browser.")
+        #info-banner p {
+            margin: 0;
+            font-size: 11px;
+            color: #555;
+        }
+
+        .popup-small {
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+        }
+
+        .bad-value {
+            color: #d9534f;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info-banner">
+        <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
+        <p>Click the map to sample the 1-hour FFG grid</p>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // ------------------------------------------------------------
+        // Basic map setup
+        // ------------------------------------------------------------
+        const map = L.map('map').setView([30.2, -90.5], 8);
+
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+        }).addTo(map);
+
+        // ------------------------------------------------------------
+        // NWS Flash Flood Guidance WMS display layer
+        // ------------------------------------------------------------
+        const ffgWmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
+
+        L.tileLayer.wms(ffgWmsUrl, {
+            layers: "0",                 // 1-hour FFG visual/display layer
+            format: "image/png",
+            transparent: true,
+            opacity: 0.70,
+            attribution: "NOAA / NWS"
+        }).addTo(map);
+
+        // ------------------------------------------------------------
+        // ArcGIS REST endpoint used for clicking/sampling values
+        // ------------------------------------------------------------
+        const identifyBaseUrl =
+            "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify";
+
+        // For the NWS FFG service:
+        // layer 0 = 1-hour FFG group/display layer
+        // layer 3 = 1-hour FFG raster image layer
+        const queryLayer = "all:3";
+
+        function getMapExtentString() {
+            const b = map.getBounds();
+
+            return [
+                b.getWest(),
+                b.getSouth(),
+                b.getEast(),
+                b.getNorth()
+            ].join(",");
+        }
+
+        function getImageDisplayString() {
+            const size = map.getSize();
+            return `${size.x},${size.y},96`;
+        }
+
+        function findBestNumericValue(result) {
+            const attrs = result.attributes || {};
+
+            // Prefer attribute values first. result.value is often garbage for this service.
+            const namedCandidates = [
+                attrs["Pixel Value"],
+                attrs["Pixel value"],
+                attrs["PixelValue"],
+                attrs["Raster.PixelValue"],
+                attrs["Stretch.Pixel Value"],
+                attrs["Stretched value"],
+                attrs["Value"],
+                attrs["VALUE"]
+            ];
+
+            for (const candidate of namedCandidates) {
+                const num = parseFloat(candidate);
+                if (Number.isFinite(num) && num > 0 && num <= 20) {
+                    return num;
+                }
+            }
+
+            // Backup scan: look through attributes with pixel/value-looking names.
+            for (const [key, val] of Object.entries(attrs)) {
+                const keyLower = key.toLowerCase();
+                const looksUseful =
+                    keyLower.includes("pixel") ||
+                    keyLower === "value" ||
+                    keyLower.includes("ffg") ||
+                    keyLower.includes("guidance");
+
+                if (!looksUseful) continue;
+
+                const num = parseFloat(val);
+                if (Number.isFinite(num) && num > 0 && num <= 20) {
+                    return num;
+                }
+            }
+
+            // Last resort, but keep it sanity-limited.
+            const resultValue = parseFloat(result.value);
+            if (Number.isFinite(resultValue) && resultValue > 0 && resultValue <= 20) {
+                return resultValue;
+            }
+
+            return null;
+        }
+
+        function buildIdentifyUrl(lat, lng) {
+            const params = new URLSearchParams({
+                f: "json",
+                geometry: `${lng},${lat}`,
+                geometryType: "esriGeometryPoint",
+                sr: "4326",
+                layers: queryLayer,
+                tolerance: "1",
+                mapExtent: getMapExtentString(),
+                imageDisplay: getImageDisplayString(),
+                returnGeometry: "false",
+                returnUnformattedValues: "true"
+            });
+
+            return `${identifyBaseUrl}?${params.toString()}`;
+        }
+
+        map.on("click", function(e) {
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
+
+            const popup = L.popup()
+                .setLatLng(e.latlng)
+                .setContent(`<div class="popup-small"><i>Sampling FFG grid...</i></div>`)
+                .openOn(map);
+
+            const identifyUrl = buildIdentifyUrl(lat, lng);
+
+            fetch(identifyUrl)
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Full identify response:", data);
+
+                    if (!data.results || data.results.length === 0) {
+                        popup.setContent(`
+                            <div class="popup-small">
+                                <b>Lat:</b> ${lat.toFixed(4)} |
+                                <b>Lng:</b> ${lng.toFixed(4)}<br>
+                                <span style="color:#888;">No FFG value returned here.</span>
+                            </div>
+                        `);
+                        return;
+                    }
+
+                    const result = data.results[0];
+                    const ffg = findBestNumericValue(result);
+
+                    console.log("Chosen result:", result);
+                    console.log("Chosen FFG value:", ffg);
+
+                    if (ffg === null) {
+                        popup.setContent(`
+                            <div class="popup-small">
+                                <b>Sampled value looked invalid.</b><br>
+                                <span class="bad-value">Raw result.value:</span> ${result.value}<br><br>
+                                <span style="color:#888;">
+                                    Open browser console with F12 to inspect the full identify response.
+                                </span><br><br>
+                                <b>Lat:</b> ${lat.toFixed(4)} |
+                                <b>Lng:</b> ${lng.toFixed(4)}
+                            </div>
+                        `);
+                        return;
+                    }
+
+                    popup.setContent(`
+                        <div class="popup-small">
+                            <strong>1-Hr FFG:</strong>
+                            <span style="color:#d9534f; font-weight:bold;">
+                                ${ffg.toFixed(2)} inches
+                            </span><br>
+                            <span style="color:#666; font-size:11px;">
+                                Rainfall required in 1 hour to initiate flash flooding.
+                            </span><br><br>
+                            <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
+                            <b>Lat:</b> ${lat.toFixed(4)} |
+                            <b>Lng:</b> ${lng.toFixed(4)}
+                        </div>
+                    `);
+                })
+                .catch(error => {
+                    console.error("Identify error:", error);
+
+                    popup.setContent(`
+                        <div class="popup-small">
+                            <b>Error:</b> Could not query the NWS FFG service.<br>
+                            <span style="color:#888;">Check console with F12.</span>
+                        </div>
+                    `);
+                });
+        });
+    </script>
+</body>
+</html>
+"""
+
+output_file = Path("index.html")
+output_file.write_text(html, encoding="utf-8")
+
+webbrowser.open(output_file.resolve().as_uri())
+
+print(f"Created and opened: {output_file.resolve()}")
