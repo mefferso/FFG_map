@@ -1,5 +1,4 @@
 from pathlib import Path
-import webbrowser
 
 html = r"""<!DOCTYPE html>
 <html lang="en">
@@ -123,6 +122,8 @@ html = r"""<!DOCTYPE html>
                 attrs["Pixel value"],
                 attrs["PixelValue"],
                 attrs["Raster.PixelValue"],
+                attrs["Raster.ServicePixelValue"],
+                attrs["Classify.Pixel Value"],
                 attrs["Stretch.Pixel Value"],
                 attrs["Stretched value"],
                 attrs["Value"],
@@ -198,9 +199,12 @@ html = r"""<!DOCTYPE html>
                     if (!data.results || data.results.length === 0) {
                         popup.setContent(`
                             <div class="popup-small">
+                                <b>No FFG value returned here.</b><br>
+                                <span style="color:#888;">
+                                    NOAA did not return a gridded value for this click.
+                                </span><br><br>
                                 <b>Lat:</b> ${lat.toFixed(4)} |
-                                <b>Lng:</b> ${lng.toFixed(4)}<br>
-                                <span style="color:#888;">No FFG value returned here.</span>
+                                <b>Lng:</b> ${lng.toFixed(4)}
                             </div>
                         `);
                         return;
@@ -215,10 +219,10 @@ html = r"""<!DOCTYPE html>
                     if (ffg === null) {
                         popup.setContent(`
                             <div class="popup-small">
-                                <b>Sampled value looked invalid.</b><br>
-                                <span class="bad-value">Raw result.value:</span> ${result.value}<br><br>
+                                <b>No FFG value returned here.</b><br>
                                 <span style="color:#888;">
-                                    Open browser console with F12 to inspect the full identify response.
+                                    NOAA returned NoData for this raster pixel. This usually means water, marsh,
+                                    outside the valid raster area, or a masked grid cell.
                                 </span><br><br>
                                 <b>Lat:</b> ${lat.toFixed(4)} |
                                 <b>Lng:</b> ${lng.toFixed(4)}
