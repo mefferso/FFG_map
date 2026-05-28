@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WFO LIX Flash Flood Guidance</title>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -13,7 +13,7 @@
             padding: 0;
             width: 100%;
             height: 100%;
-            background: #1a1a1a;
+            background-color: #1a1a1a;
         }
 
         #info-banner {
@@ -39,22 +39,12 @@
             color: #555;
         }
 
-        .leaflet-popup-content {
+        .popup-small {
             font-family: Arial, sans-serif;
             font-size: 13px;
         }
 
-        .ffg-value {
-            color: #d9534f;
-            font-weight: bold;
-        }
-
-        .muted {
-            color: #666;
-            font-size: 11px;
-        }
-
-        .bad {
+        .bad-value {
             color: #d9534f;
             font-weight: bold;
         }
@@ -62,10 +52,9 @@
 </head>
 
 <body>
-
     <div id="info-banner">
         <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
-        <p>Click the map to sample the FFG grid</p>
+        <p>Click the map to sample the 1-hour FFG grid</p>
     </div>
 
     <div id="map"></div>
@@ -74,7 +63,7 @@
 
     <script>
         // ------------------------------------------------------------
-        // Map setup
+        // Basic map setup
         // ------------------------------------------------------------
         const map = L.map('map').setView([30.2, -90.5], 8);
 
@@ -83,28 +72,30 @@
         }).addTo(map);
 
         // ------------------------------------------------------------
-        // NWS Flash Flood Guidance display layer
+        // NWS Flash Flood Guidance WMS display layer
         // ------------------------------------------------------------
-        const wmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
+        const ffgWmsUrl = "https://mapservices.weather.noaa.gov/raster/services/precip/rfc_gridded_ffg/MapServer/WmsServer";
 
-        L.tileLayer.wms(wmsUrl, {
-            layers: "0",
+        L.tileLayer.wms(ffgWmsUrl, {
+            layers: "0",                 // 1-hour FFG visual/display layer
             format: "image/png",
             transparent: true,
-            opacity: 0.7,
+            opacity: 0.70,
             attribution: "NOAA / NWS"
         }).addTo(map);
 
         // ------------------------------------------------------------
-        // ArcGIS REST identify endpoint for sampling values
+        // ArcGIS REST endpoint used for clicking/sampling values
         // ------------------------------------------------------------
         const identifyBaseUrl =
             "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer/identify";
 
-        // Layer 3 should be the 1-hour FFG raster image sublayer.
-        const identifyLayer = "all:3";
+        // For the NWS FFG service:
+        // layer 0 = 1-hour FFG group/display layer
+        // layer 3 = 1-hour FFG raster image layer
+        const queryLayer = "all:3";
 
-        function getMapExtent() {
+        function getMapExtentString() {
             const b = map.getBounds();
 
             return [
@@ -115,54 +106,52 @@
             ].join(",");
         }
 
-        function getImageDisplay() {
+        function getImageDisplayString() {
             const size = map.getSize();
             return `${size.x},${size.y},96`;
         }
 
-        function getBestFFGValue(result) {
+        function findBestNumericValue(result) {
             const attrs = result.attributes || {};
 
-            // Try the most likely ArcGIS raster attribute names first.
-            const candidates = [
+            // Prefer attribute values first. result.value is often garbage for this service.
+            const namedCandidates = [
                 attrs["Pixel Value"],
                 attrs["Pixel value"],
                 attrs["PixelValue"],
                 attrs["Raster.PixelValue"],
+                attrs["Stretch.Pixel Value"],
                 attrs["Stretched value"],
                 attrs["Value"],
                 attrs["VALUE"]
             ];
 
-            for (const candidate of candidates) {
+            for (const candidate of namedCandidates) {
                 const num = parseFloat(candidate);
-
                 if (Number.isFinite(num) && num > 0 && num <= 20) {
                     return num;
                 }
             }
 
-            // Backup: scan attributes for anything value/pixel-ish.
+            // Backup scan: look through attributes with pixel/value-looking names.
             for (const [key, val] of Object.entries(attrs)) {
                 const keyLower = key.toLowerCase();
-
-                if (
+                const looksUseful =
                     keyLower.includes("pixel") ||
                     keyLower === "value" ||
                     keyLower.includes("ffg") ||
-                    keyLower.includes("guidance")
-                ) {
-                    const num = parseFloat(val);
+                    keyLower.includes("guidance");
 
-                    if (Number.isFinite(num) && num > 0 && num <= 20) {
-                        return num;
-                    }
+                if (!looksUseful) continue;
+
+                const num = parseFloat(val);
+                if (Number.isFinite(num) && num > 0 && num <= 20) {
+                    return num;
                 }
             }
 
-            // Last resort: result.value, but only if it passes sanity check.
+            // Last resort, but keep it sanity-limited.
             const resultValue = parseFloat(result.value);
-
             if (Number.isFinite(resultValue) && resultValue > 0 && resultValue <= 20) {
                 return resultValue;
             }
@@ -176,10 +165,10 @@
                 geometry: `${lng},${lat}`,
                 geometryType: "esriGeometryPoint",
                 sr: "4326",
-                layers: identifyLayer,
+                layers: queryLayer,
                 tolerance: "1",
-                mapExtent: getMapExtent(),
-                imageDisplay: getImageDisplay(),
+                mapExtent: getMapExtentString(),
+                imageDisplay: getImageDisplayString(),
                 returnGeometry: "false",
                 returnUnformattedValues: "true"
             });
@@ -193,7 +182,7 @@
 
             const popup = L.popup()
                 .setLatLng(e.latlng)
-                .setContent("<i>Sampling FFG grid...</i>")
+                .setContent(`<div class="popup-small"><i>Sampling FFG grid...</i></div>`)
                 .openOn(map);
 
             const identifyUrl = buildIdentifyUrl(lat, lng);
@@ -205,37 +194,43 @@
 
                     if (!data.results || data.results.length === 0) {
                         popup.setContent(`
-                            <b>Lat:</b> ${lat.toFixed(4)} |
-                            <b>Lng:</b> ${lng.toFixed(4)}<br>
-                            <span class="muted">No FFG grid value returned here.</span>
+                            <div class="popup-small">
+                                <b>Lat:</b> ${lat.toFixed(4)} |
+                                <b>Lng:</b> ${lng.toFixed(4)}<br>
+                                <span style="color:#888;">No FFG value returned here.</span>
+                            </div>
                         `);
                         return;
                     }
 
                     const result = data.results[0];
-                    const ffg = getBestFFGValue(result);
+                    const ffg = findBestNumericValue(result);
 
-                    console.log("Chosen identify result:", result);
+                    console.log("Chosen result:", result);
                     console.log("Chosen FFG value:", ffg);
 
                     if (ffg === null) {
                         popup.setContent(`
-                            <b>Bad/unsupported sampled value</b><br>
-                            <span class="bad">Raw result.value:</span> ${result.value}<br><br>
-                            <span class="muted">
-                                This is not a valid 1-hour FFG value. Open DevTools with F12 and check the console.
-                            </span><br><br>
-                            <b>Lat:</b> ${lat.toFixed(4)} |
-                            <b>Lng:</b> ${lng.toFixed(4)}
+                            <div class="popup-small">
+                                <b>Sampled value looked invalid.</b><br>
+                                <span class="bad-value">Raw result.value:</span> ${result.value}<br><br>
+                                <span style="color:#888;">
+                                    Open browser console with F12 to inspect the full identify response.
+                                </span><br><br>
+                                <b>Lat:</b> ${lat.toFixed(4)} |
+                                <b>Lng:</b> ${lng.toFixed(4)}
+                            </div>
                         `);
                         return;
                     }
 
                     popup.setContent(`
-                        <div>
+                        <div class="popup-small">
                             <strong>1-Hr FFG:</strong>
-                            <span class="ffg-value">${ffg.toFixed(2)} inches</span><br>
-                            <span class="muted">
+                            <span style="color:#d9534f; font-weight:bold;">
+                                ${ffg.toFixed(2)} inches
+                            </span><br>
+                            <span style="color:#666; font-size:11px;">
                                 Rainfall required in 1 hour to initiate flash flooding.
                             </span><br><br>
                             <hr style="border:0; border-top:1px solid #ddd; margin:5px 0;">
@@ -248,12 +243,13 @@
                     console.error("Identify error:", error);
 
                     popup.setContent(`
-                        <b>Error:</b> Could not query NOAA/NWS FFG service.<br>
-                        <span class="muted">Open DevTools with F12 and check the console.</span>
+                        <div class="popup-small">
+                            <b>Error:</b> Could not query the NWS FFG service.<br>
+                            <span style="color:#888;">Check console with F12.</span>
+                        </div>
                     `);
                 });
         });
     </script>
-
 </body>
 </html>
