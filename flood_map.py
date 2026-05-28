@@ -66,8 +66,14 @@ html = r"""<!DOCTYPE html>
         }).addTo(map);
 
         const mapServerBase = "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer";
-        const displayLayer = "show:3";
-        const queryLayer = "all:3";
+
+        // Use the parent 1-hour mosaic layer for drawing. The child raster layer alone
+        // can draw only part of the mosaic in some views, which is the weird cutoff you saw.
+        const displayLayer = "show:0";
+
+        // Query both the parent mosaic and child image layer. ArcGIS usually returns the
+        // useful identify result from the child image layer, but asking both is safer.
+        const queryLayer = "all:0,3";
 
         function getMapExtentString() {
             const b = map.getBounds();
@@ -87,7 +93,7 @@ html = r"""<!DOCTYPE html>
                 f: "image",
                 bbox: getMapExtentString(),
                 bboxSR: "4326",
-                imageSR: "4326",
+                imageSR: "3857",
                 size: `${size.x},${size.y}`,
                 dpi: "96",
                 format: "png32",
@@ -96,6 +102,7 @@ html = r"""<!DOCTYPE html>
             });
 
             const url = `${mapServerBase}/export?${params.toString()}`;
+            console.log("FFG overlay URL:", url);
 
             if (window.ffgOverlay) {
                 window.ffgOverlay.setUrl(url);
@@ -110,6 +117,7 @@ html = r"""<!DOCTYPE html>
 
         function findBestNumericValue(result) {
             const attrs = result.attributes || {};
+
             const candidates = [
                 attrs["Raster.ServicePixelValue"],
                 attrs["Classify.Pixel Value"],
@@ -142,7 +150,7 @@ html = r"""<!DOCTYPE html>
                 geometryType: "esriGeometryPoint",
                 sr: "4326",
                 layers: queryLayer,
-                tolerance: "3",
+                tolerance: "5",
                 mapExtent: getMapExtentString(),
                 imageDisplay: getImageDisplayString(),
                 returnGeometry: "false",
@@ -178,20 +186,27 @@ html = r"""<!DOCTYPE html>
                     }
 
                     let ffg = null;
+                    let chosenResult = null;
+
                     for (const result of data.results) {
-                        ffg = findBestNumericValue(result);
-                        if (ffg !== null) break;
+                        const testValue = findBestNumericValue(result);
+                        if (testValue !== null) {
+                            ffg = testValue;
+                            chosenResult = result;
+                            break;
+                        }
                     }
 
+                    console.log("Chosen identify result:", chosenResult);
                     console.log("Chosen FFG value:", ffg);
 
                     if (ffg === null) {
                         popup.setContent(`
                             <div class="popup-small">
-                                <b>No FFG value returned here.</b><br>
+                                <b>No numeric FFG value returned here.</b><br>
                                 <span style="color:#888;">
-                                    NOAA returned NoData for this raster pixel. If this happens everywhere,
-                                    the NOAA identify endpoint may not expose values even though the image layer draws.
+                                    The image layer is drawing, but NOAA returned NoData or did not expose a numeric
+                                    raster value for this pixel.
                                 </span><br><br>
                                 <b>Lat:</b> ${lat.toFixed(4)} | <b>Lng:</b> ${lng.toFixed(4)}
                             </div>
