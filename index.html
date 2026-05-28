@@ -48,7 +48,7 @@
 
 <body>
     <div id="info-banner">
-        <h3>WFO LIX - Latest 1-Hr Flash Flood Guidance</h3>
+        <h3>LA/MS - Latest 1-Hr Flash Flood Guidance</h3>
         <p>Click the map to sample the 1-hour FFG grid</p>
     </div>
 
@@ -57,10 +57,31 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
-        const map = L.map('map').setView([30.2, -90.5], 8);
+        // Rough bounding box for Louisiana + Mississippi, with enough padding for border context.
+        const laMsBounds = L.latLngBounds(
+            [28.75, -94.25],   // southwest corner
+            [35.15, -88.00]    // northeast corner
+        );
+
+        const map = L.map('map', {
+            maxBounds: laMsBounds.pad(0.25),
+            maxBoundsViscosity: 0.85,
+            minZoom: 6
+        });
+
+        map.fitBounds(laMsBounds);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+        }).addTo(map);
+
+        // Add a subtle LA/MS domain box so it is obvious what the app is focused on.
+        L.rectangle(laMsBounds, {
+            color: '#ffffff',
+            weight: 1,
+            opacity: 0.55,
+            fill: false,
+            interactive: false
         }).addTo(map);
 
         const mapServerBase = "https://mapservices.weather.noaa.gov/raster/rest/services/precip/rfc_gridded_ffg/MapServer";
