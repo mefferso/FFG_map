@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - "flood_map.py"
+      - "requirements.txt"
       - ".github/workflows/build-map.yml"
   schedule:
     - cron: "15 * * * *"
@@ -27,19 +28,27 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install system GRIB dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
       - name: Run map builder
         run: python flood_map.py
 
-      - name: Commit updated index.html
+      - name: Commit updated web output
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add index.html
+          git add index.html data/ffg_grid.json data/ffg_overlay.png
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Update generated FFG map"
+            git commit -m "Update native LMRFC FFG map"
             git push
           fi
