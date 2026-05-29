@@ -11,6 +11,42 @@
         #info-banner h3 { margin:0 0 4px 0; font-size:15px; line-height:1.2; }
         #info-banner p, #ffg-status { margin:0; font-size:11px; color:#555; line-height:1.35; }
         #ffg-status { margin-top:5px; font-weight:600; }
+
+        #cursor-sampler {
+            position:absolute;
+            left:14px;
+            bottom:14px;
+            z-index:10;
+            background:rgba(255,255,255,.94);
+            color:#222;
+            padding:8px 11px;
+            border-radius:7px;
+            box-shadow:0 2px 8px rgba(0,0,0,.35);
+            font-family:Arial,sans-serif;
+            min-width:190px;
+            pointer-events:none;
+        }
+
+        #cursor-sampler .label {
+            font-size:11px;
+            color:#666;
+            line-height:1.2;
+        }
+
+        #cursor-sampler .value {
+            margin-top:2px;
+            font-size:16px;
+            font-weight:700;
+            line-height:1.2;
+        }
+
+        #cursor-sampler .coords {
+            margin-top:3px;
+            font-size:10px;
+            color:#666;
+            line-height:1.2;
+        }
+
         .popup-small { font-family:Arial,sans-serif; font-size:13px; line-height:1.35; }
         .ffg-value { color:#d9534f; font-weight:bold; }
     </style>
@@ -21,7 +57,15 @@
         <p>Built from WPC raw GRIB2 FFG dump, locally regridded for LA/MS.</p>
         <div id="ffg-status">Loading native FFG grid...</div>
     </div>
+
+    <div id="cursor-sampler">
+        <div class="label">Cursor sample</div>
+        <div class="value">Move over map</div>
+        <div class="coords">Lat/Lng: --</div>
+    </div>
+
     <div id="viewDiv"></div>
+
     <script src="https://js.arcgis.com/4.30/"></script>
     <script>
         require([
@@ -33,14 +77,38 @@
             const imageUrl = "data/ffg_overlay.png?v=20260529110911";
             let ffgGrid = null;
 
-            function setStatus(msg) { document.getElementById("ffg-status").textContent = msg; }
+            function setStatus(msg) {
+                document.getElementById("ffg-status").textContent = msg;
+            }
+
+            function setCursorSample(label, valueText, coordsText) {
+                const sampler = document.getElementById("cursor-sampler");
+                sampler.querySelector(".label").textContent = label;
+                sampler.querySelector(".value").textContent = valueText;
+                sampler.querySelector(".coords").textContent = coordsText;
+            }
 
             fetch(gridUrl).then(r => r.json()).then(data => {
                 ffgGrid = data;
+
                 const e = data.extent;
                 const p = data.panLimit;
-                const localExtent = new Extent({ xmin:e.xmin, ymin:e.ymin, xmax:e.xmax, ymax:e.ymax, spatialReference:{ wkid:4326 } });
-                const panLimit = new Extent({ xmin:p.xmin, ymin:p.ymin, xmax:p.xmax, ymax:p.ymax, spatialReference:{ wkid:4326 } });
+
+                const localExtent = new Extent({
+                    xmin:e.xmin,
+                    ymin:e.ymin,
+                    xmax:e.xmax,
+                    ymax:e.ymax,
+                    spatialReference:{ wkid:4326 }
+                });
+
+                const panLimit = new Extent({
+                    xmin:p.xmin,
+                    ymin:p.ymin,
+                    xmax:p.xmax,
+                    ymax:p.ymax,
+                    spatialReference:{ wkid:4326 }
+                });
 
                 const imageElement = new ImageElement({
                     image: imageUrl,
@@ -53,37 +121,95 @@
                     opacity: 0.82
                 });
 
-                const map = new Map({ basemap:"dark-gray-vector", layers:[ffgLayer] });
+                const map = new Map({
+                    basemap:"dark-gray-vector",
+                    layers:[ffgLayer]
+                });
+
                 const view = new MapView({
                     container:"viewDiv",
                     map,
                     extent: localExtent,
-                    constraints: { geometry: panLimit, minZoom:6, maxZoom:12, rotationEnabled:false },
-                    popup: { dockEnabled:false, collapseEnabled:false }
+                    constraints: {
+                        geometry: panLimit,
+                        minZoom:6,
+                        maxZoom:12,
+                        rotationEnabled:false
+                    },
+                    popup: {
+                        dockEnabled:false,
+                        collapseEnabled:false
+                    }
                 });
 
                 view.when(() => {
                     view.ui.add(new Home({ view }), "top-left");
                     view.ui.add(new LayerList({ view }), "top-right");
+
                     const m = data.metadata || {};
                     setStatus(`Loaded ${m.source_file || "native GRIB2"} | msg ${m.grib_message_number || "?"} | ${m.created_utc || ""}`);
                 });
 
                 function sampleGrid(lon, lat) {
                     if (!ffgGrid) return null;
+
                     const e = ffgGrid.extent;
-                    if (lon < e.xmin || lon > e.xmax || lat < e.ymin || lat > e.ymax) return null;
+
+                    if (lon < e.xmin || lon > e.xmax || lat < e.ymin || lat > e.ymax) {
+                        return null;
+                    }
+
                     const col = Math.round((lon - e.xmin) / (e.xmax - e.xmin) * (ffgGrid.nx - 1));
                     const row = Math.round((lat - e.ymin) / (e.ymax - e.ymin) * (ffgGrid.ny - 1));
-                    if (row < 0 || row >= ffgGrid.ny || col < 0 || col >= ffgGrid.nx) return null;
+
+                    if (row < 0 || row >= ffgGrid.ny || col < 0 || col >= ffgGrid.nx) {
+                        return null;
+                    }
+
                     const value = ffgGrid.values[row][col];
                     return Number.isFinite(value) ? value : null;
                 }
+
+                let lastMove = 0;
+
+                view.on("pointer-move", (event) => {
+                    const now = Date.now();
+
+                    if (now - lastMove < 60) {
+                        return;
+                    }
+
+                    lastMove = now;
+
+                    const point = view.toMap({
+                        x:event.x,
+                        y:event.y
+                    });
+
+                    if (!point) return;
+
+                    const lon = point.longitude;
+                    const lat = point.latitude;
+                    const value = sampleGrid(lon, lat);
+
+                    const coords = `Lat/Lng: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+
+                    if (value === null) {
+                        setCursorSample("Cursor sample", "No local data", coords);
+                    } else {
+                        setCursorSample("1-hr FFG", `${value.toFixed(2)} inches`, coords);
+                    }
+                });
+
+                view.on("pointer-leave", () => {
+                    setCursorSample("Cursor sample", "Move over map", "Lat/Lng: --");
+                });
 
                 view.on("click", (event) => {
                     const lon = event.mapPoint.longitude;
                     const lat = event.mapPoint.latitude;
                     const value = sampleGrid(lon, lat);
+
                     if (value === null) {
                         view.popup.open({
                             title:"No current local FFG data",
@@ -92,6 +218,7 @@
                         });
                         return;
                     }
+
                     view.popup.open({
                         title:"Native 1-Hr Flash Flood Guidance",
                         location:event.mapPoint,
@@ -101,6 +228,7 @@
             }).catch(err => {
                 console.error(err);
                 setStatus("Native FFG grid failed to load. Check workflow/data output.");
+                setCursorSample("Cursor sample", "Grid failed", "Lat/Lng: --");
             });
         });
     </script>
